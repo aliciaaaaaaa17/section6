@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get out the vote · a Q-learning game</title>
+<style>
+  :root {
+    --bg: #fbf8f4; --surface: #ffffff; --fg: #161719; --muted: #62666c; --line: #e8e1da;
+    --accent: #8c1515; --accent-soft: #f3e6e6; --ok: #2f6b45; --ok-soft: #e5f0e8;
+    --warn-soft: #efece7; --code-bg: #f4f1ec;
+    --font-heading: Georgia, "Times New Roman", serif;
+    --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --surface: #202225; --fg: #ecebe8; --muted: #a2a6ac; --line: #34373b;
+      --accent: #ff9a9a; --accent-soft: #3a2224; --ok: #7fd09a; --ok-soft: #1f3327;
+      --warn-soft: #2a2b2d; --code-bg: #2a2c2f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 var(--font-body); }
+  .wrap { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1, h2 { font-family: var(--font-heading); font-weight: 600; line-height: 1.2; }
+  h1 { font-size: 2.1rem; margin: 0 0 .4rem; }
+  h2 { font-size: 1.3rem; margin: 0 0 .6rem; }
+  p { margin: 0 0 .7rem; max-width: 42rem; }
+  code { font-family: var(--font-mono); font-size: .88em; background: var(--code-bg); padding: .08em .35em; border-radius: 4px; }
+  kbd { font-family: var(--font-mono); font-size: .85em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 .35em; background: var(--surface); }
+  .muted { color: var(--muted); }
+  .small { font-size: .88rem; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 24rem) minmax(0, 1fr); gap: 1.5rem; margin-top: 1.5rem; align-items: start; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.1rem; }
+  .panel + .panel { margin-top: 1rem; }
+
+  /* ---- the board ---- */
+  .board { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; width: 100%; }
+  .cell {
+    aspect-ratio: 1; position: relative; border-radius: 4px; background: var(--warn-soft);
+    border: 1px solid var(--line); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; font-size: .66rem; line-height: 1.15;
+  }
+  .cell .icon { font-size: 1.35rem; line-height: 1; }
+  .cell.supporter { background: var(--ok-soft); border-color: var(--ok); }
+  .cell.opponent { background: var(--accent-soft); border-color: var(--accent); }
+  .cell.voted { box-shadow: inset 0 0 0 2px var(--ok); }
+  .cell.here { outline: 3px solid var(--fg); outline-offset: -3px; }
+  .walker { position: absolute; top: 2px; right: 3px; font-size: 1.1rem; line-height: 1; }
+  .scoreline { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; margin: 0 0 .7rem; font-size: .95rem; }
+  .scoreline b { font-variant-numeric: tabular-nums; }
+  .modelabel { font-weight: 600; margin: 0 0 .5rem; }
+  .msg { min-height: 2.9em; margin: .7rem 0 0; font-size: .92rem; }
+
+  /* ---- buttons and controls ---- */
+  button {
+    font: inherit; font-size: .92rem; cursor: pointer; color: var(--fg); background: var(--surface);
+    border: 1px solid var(--muted); border-radius: 6px; padding: .4rem .8rem;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  button.primary:hover:not(:disabled) { color: var(--bg); filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .btnrow { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .pad { display: grid; grid-template-columns: repeat(3, 3.2rem); grid-template-rows: repeat(2, 2.6rem); gap: 4px; margin: .8rem 0 .4rem; }
+  .pad button { padding: 0; }
+  .pad .up { grid-column: 2; grid-row: 1; }
+  .pad .left { grid-column: 1; grid-row: 2; }
+  .pad .down { grid-column: 2; grid-row: 2; }
+  .pad .right { grid-column: 3; grid-row: 2; }
+  .padwrap { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.2rem; }
+
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+  th, td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-weight: 600; }
+  td.num { width: 6rem; }
+  input[type=number] {
+    width: 5.5rem; font: inherit; font-family: var(--font-mono); font-size: .9rem; color: var(--fg);
+    background: var(--bg); border: 1px solid var(--muted); border-radius: 4px; padding: .25rem .4rem;
+  }
+  select {
+    width: 100%; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--muted);
+    border-radius: 4px; padding: .35rem .5rem; margin: .3rem 0 .8rem;
+  }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: .88rem; margin: 0 0 .4rem; }
+  .legend span::before { content: ""; display: inline-block; width: 1.6rem; margin-right: .4rem; vertical-align: middle; border-top: 3px solid var(--accent); }
+  .legend .goal::before { border-top: 3px dashed var(--ok); }
+  canvas { display: block; width: 100%; height: 280px; }
+  .stats { display: flex; flex-wrap: wrap; gap: .2rem 1.5rem; font-size: .9rem; margin: .8rem 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Get out the vote</h1>
+<p>You are a canvasser with 25 moves before the polls close. Two houses hold supporters; one holds someone who is not. Knock on a supporter&rsquo;s door and they turn out to vote, once. First play it yourself, then train an agent that is told only what earns points.</p>
+
+<div class="layout">
+
+  <!-- ========== left: the game ========== -->
+  <div>
+    <div class="panel">
+      <p class="modelabel" id="modeLabel">Your game</p>
+      <div class="scoreline" aria-live="off">
+        <span>Score <b id="score">0.0</b></span>
+        <span>Moves left <b id="movesLeft">25</b></span>
+        <span>Supporters turned out <b id="turnedOut">0</b> of 2</span>
+      </div>
+      <div class="board" id="board" role="img" aria-label="5 by 5 grid. The canvasser starts top left."></div>
+      <div class="padwrap">
+        <div class="pad" aria-label="Move controls">
+          <button class="up" id="bUp" aria-label="Move up" type="button">&uarr;</button>
+          <button class="left" id="bLeft" aria-label="Move left" type="button">&larr;</button>
+          <button class="down" id="bDown" aria-label="Move down" type="button">&darr;</button>
+          <button class="right" id="bRight" aria-label="Move right" type="button">&rarr;</button>
+        </div>
+        <div class="btnrow">
+          <button id="bKnock" class="primary" type="button">Knock</button>
+          <button id="bNew" type="button">New game</button>
+        </div>
+      </div>
+      <p class="small muted" style="margin:.2rem 0 0">Keys: arrows to move, <kbd>Space</kbd> or <kbd>K</kbd> to knock. Knocking uses a move.</p>
+      <p class="msg" id="msg" aria-live="polite"></p>
+    </div>
+  </div>
+
+  <!-- ========== right: reward, agent, chart ========== -->
+  <div>
+    <div class="panel">
+      <h2>The reward</h2>
+      <p class="small muted">This is all the agent is told about what we want. Change a number and the agent resets, because what it learned was for the old points.</p>
+      <label for="rewardMode" class="small muted">Reward preset</label>
+      <select id="rewardMode" aria-label="Choose reward preset">
+        <option value="default">Default: turnout-focused</option>
+        <option value="contact">Campaign: + contact bonus for knocking close to a voter</option>
+      </select>
+      <table>
+        <thead><tr><th scope="col">When this happens</th><th scope="col">Points</th></tr></thead>
+        <tbody>
+          <tr><td><label for="rTurnout">A supporter turns out to vote</label></td><td class="num"><input id="rTurnout" type="number" step="0.1"></td></tr>
+          <tr><td><label for="rStep">Every move (the clock is ticking)</label></td><td class="num"><input id="rStep" type="number" step="0.1"></td></tr>
+          <tr><td><label for="rAnnoyed">Knock on the non-supporter&rsquo;s door</label></td><td class="num"><input id="rAnnoyed" type="number" step="0.1"></td></tr>
+          <tr><td><label for="rWasted">Knock with nobody left to turn out</label></td><td class="num"><input id="rWasted" type="number" step="0.1"></td></tr>
+        </tbody>
+      </table>
+      <p style="margin:.7rem 0 0"><button id="bDefaults" type="button">Restore default points</button></p>
+    </div>
+
+    <div class="panel">
+      <h2>The agent</h2>
+      <div class="btnrow">
+        <button id="bTrain100" class="primary" type="button">Train 100 games</button>
+        <button id="bTrain1000" class="primary" type="button">Train 1,000 games</button>
+        <button id="bWatch" type="button">Watch it play</button>
+        <button id="bReset" type="button">Reset agent</button>
+      </div>
+      <p class="stats">
+        <span>Games trained <b id="nGames">0</b></span>
+        <span class="muted">exploring 20% of the time, learning rate 0.2, discount 0.95</span>
+      </p>
+      <p class="small muted" style="margin:.5rem 0 0" id="stateNote"></p>
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:1rem">
+  <h2>Learning curve</h2>
+  <p class="small muted">Each point averages 50 training games, including the random exploring. The solid line is the reward the agent was given. The dashed line is the real goal: both supporters turned out.</p>
+  <div class="legend"><span class="reward">Average reward per game (left axis)</span><span class="goal">Games that turned out both supporters (right axis)</span></div>
+  <canvas id="chart" role="img" aria-label="Learning curve"></canvas>
+  <p class="small muted" id="chartNote" aria-live="polite" style="margin:.5rem 0 0"></p>
+</div>
+
+</div>
+
+<script>
+"use strict";
+
+/* ===================================================================
+   1 · The rules of the game
+   =================================================================== */
+var SIZE = 5;                 // 5×5 grid
+var MAX_MOVES = 25;           // moves before the polls close
+var START = 0;                // the canvasser starts in the top-left square
+var ACTIONS = ["up", "down", "left", "right", "knock"];
+var MOVES = [[-1, 0], [1, 0], [0, -1], [0, 1]];   // row/column change for the four moves
+
+// Houses sit on fixed squares (index = row × 5 + column). The first two are supporters.
+var HOUSES = [
+  { cell: 4,  supporter: true },    // top-right corner
+  { cell: 22, supporter: true },    // bottom row, middle
+  { cell: 12, supporter: false }    // dead centre, right on the way
+];
+var NUM_STATES = SIZE * SIZE * 4;   // 25 squares × 4 combinations of "which supporters have voted" = 100
+var NUM_ACTIONS = ACTIONS.length;   // 4 moves + knock = 5
+
+/* ===================================================================
+   2 · The reward: the only thing the agent is told about what we want
+   =================================================================== */
+var REWARD_MODE = "default";
+var REWARD_PRESETS = {
+  default: { turnout: 10, step: -0.1, annoyed: -3, wasted: -0.5 },
+  contact: { turnout: 10, step: -0.1, annoyed: -3, wasted: -0.5, contact: 6 }
+};
+var REWARD = {};
+for (var k in REWARD_PRESETS.default) REWARD[k] = REWARD_PRESETS.default[k];
+var DEFAULT_REWARD = REWARD_PRESETS.default;
+
+// Points for one move. `e` says what happened on that move.
+function reward(e) {
+  var points = REWARD.step;                         // every move costs a little: time is short
+  if (e.turnedOut) points += REWARD.turnout;        // a supporter just turned out to vote
+  if (e.annoyed) {
+    points += REWARD.annoyed;                       // you knocked on the non-supporter's door
+    if (REWARD_MODE === "contact") points += REWARD.contact; // campaign-style contact credit
+  }
+  if (e.wasted)    points += REWARD.wasted;         // you knocked where nobody could be turned out
+  return points;
+}
+
+/* ===================================================================
+   3 · The game object (used by the person and by the agent)
+   =================================================================== */
+function Game() { this.reset(); }
+Game.prototype.reset = function () {
+  this.cell = START;
+  this.voted = [false, false];        // has supporter 0 / supporter 1 voted yet?
+  this.moves = 0;
+  this.total = 0;                     // score so far
+  this.done = false;
+  this.goal = false;                  // the REAL goal: both supporters turned out
+  return this.state();
+};
+// What the agent sees: its square and which supporters have voted. (It does not see the move counter.)
+Game.prototype.state = function () {
+  return this.cell * 4 + (this.voted[0] ? 1 : 0) + (this.voted[1] ? 2 : 0);
+};
+Game.prototype.houseHere = function () {
+  for (var i = 0; i < HOUSES.length; i++) if (HOUSES[i].cell === this.cell) return i;
+  return -1;
+};
+Game.prototype.turnedOutCount = function () { return (this.voted[0] ? 1 : 0) + (this.voted[1] ? 1 : 0); };
+Game.prototype.step = function (a) {
+  var e = { turnedOut: false, annoyed: false, wasted: false };
+  if (a < 4) {                                      // a move: walls keep you where you are
+    var r = Math.floor(this.cell / SIZE) + MOVES[a][0], c = this.cell % SIZE + MOVES[a][1];
+    if (r >= 0 && r < SIZE && c >= 0 && c < SIZE) this.cell = r * SIZE + c;
+  } else {                                          // a knock
+    var h = this.houseHere();
+    if (h === -1) e.wasted = true;                  // no door here
+    else if (!HOUSES[h].supporter) e.annoyed = true;
+    else if (this.voted[h]) e.wasted = true;        // already voted
+    else { this.voted[h] = true; e.turnedOut = true; }
+  }
+  this.moves++;
+  if (this.voted[0] && this.voted[1]) this.goal = true;   // the real goal, once reached, counts for the game
+  this.done = this.moves >= MAX_MOVES;              // the polls close after 25 moves, no matter what
+  var pts = reward(e);
+  this.total += pts;
+  return { state: this.state(), reward: pts, done: this.done, event: e };
+};
+
+/* ===================================================================
+   4 · The learner: tabular Q-learning
+   Q[s][a] = how much total future reward the agent expects if it takes action a in state s.
+   After each move:  Q[s][a] += alpha × (reward + gamma × best Q[next state] − Q[s][a])
+   =================================================================== */
+var SEED = 158;
+function makeRng(seed) {          // small seeded random number generator: same seed, same results
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function Agent() {
+  this.alpha = 0.2;               // learning rate
+  this.gamma = 0.95;              // how much it cares about later rewards
+  this.epsilon = 0.2;             // how often it tries a random move
+  this.random = makeRng(SEED);
+  this.Q = [];
+  for (var s = 0; s < NUM_STATES; s++) this.Q.push([0, 0, 0, 0, 0]);   // all values start at 0
+  this.history = [];              // one entry per training game: { total, goal }
+}
+// Highest-valued action in state s; ties are broken at random.
+Agent.prototype.best = function (s, random) {
+  var q = this.Q[s], top = Math.max.apply(null, q), ties = [];
+  for (var a = 0; a < NUM_ACTIONS; a++) if (q[a] === top) ties.push(a);
+  return ties[Math.floor((random || this.random)() * ties.length)];
+};
+// Epsilon-greedy: usually the best-known action, sometimes a random one.
+Agent.prototype.act = function (s) {
+  if (this.random() < this.epsilon) return Math.floor(this.random() * NUM_ACTIONS);
+  return this.best(s);
+};
+// Play one game while learning.
+Agent.prototype.trainGame = function () {
+  var g = new Game(), s = g.state();
+  while (!g.done) {
+    var a = this.act(s), out = g.step(a), q = this.Q[s];
+    // When the game is over there is no "later", so only the reward counts.
+    var target = out.reward + (out.done ? 0 : this.gamma * Math.max.apply(null, this.Q[out.state]));
+    q[a] += this.alpha * (target - q[a]);
+    s = out.state;
+  }
+  this.history.push({ total: g.total, goal: g.goal });
+};
+Agent.prototype.train = function (n) { for (var i = 0; i < n; i++) this.trainGame(); };
+
+/* ===================================================================
+   ===== PAGE: everything below only draws things and wires up buttons =====
+   =================================================================== */
+function $(id) { return document.getElementById(id); }
+
+var agent = new Agent();
+var human = new Game();
+var view = human;                 // the game currently shown on the board
+var watching = false;             // true while an animated game is running
+
+/* ---------- the board ---------- */
+var boardEl = $("board"), cellEls = [];
+(function buildBoard() {
+  for (var i = 0; i < SIZE * SIZE; i++) {
+    var d = document.createElement("div");
+    d.className = "cell";
+    boardEl.appendChild(d);
+    cellEls.push(d);
+  }
+})();
+
+function drawBoard(g) {
+  for (var i = 0; i < cellEls.length; i++) {
+    var el = cellEls[i], h = -1, html = "";
+    for (var k = 0; k < HOUSES.length; k++) if (HOUSES[k].cell === i) h = k;
+    var cls = "cell";
+    if (h !== -1) {
+      if (HOUSES[h].supporter) {
+        var v = g.voted[h];
+        cls += " supporter" + (v ? " voted" : "");
+        html = '<span class="icon">&#127968;</span>' + (v ? "Voted &#10003;" : "Supporter");
+      } else {
+        cls += " opponent";
+        html = '<span class="icon">&#127968;</span>Not a supporter';
+      }
+    } else if (i === START) {
+      html = '<span class="muted">start</span>';
+    }
+    if (i === g.cell) { cls += " here"; html += '<span class="walker" aria-hidden="true">&#128694;</span>'; }
+    el.className = cls;
+    el.innerHTML = html;
+  }
+  var pos = "row " + (Math.floor(g.cell / SIZE) + 1) + ", column " + (g.cell % SIZE + 1);
+  boardEl.setAttribute("aria-label", "5 by 5 grid. Canvasser at " + pos + ". Supporters turned out: " + g.turnedOutCount() + " of 2.");
+  $("score").textContent = g.total.toFixed(1);
+  $("movesLeft").textContent = MAX_MOVES - g.moves;
+  $("turnedOut").textContent = g.turnedOutCount();
+  $("modeLabel").textContent = (g === human) ? "Your game" : "The agent’s game (no exploring)";
+}
+function show(g) { view = g; drawBoard(g); }
+
+/* ---------- playing it yourself ---------- */
+function describe(a, out) {
+  var e = out.event, p = (out.reward >= 0 ? "+" : "") + out.reward.toFixed(1);
+  if (e.turnedOut) return "A supporter turned out to vote! " + p;
+  if (e.annoyed) return "Not a supporter. That knock cost you. " + p;
+  if (e.wasted) return "Nobody to turn out here. " + p;
+  return "Moved " + ACTIONS[a] + ". " + p;
+}
+function endText(g) {
+  return "Polls closed. " + g.turnedOutCount() + " of 2 supporters turned out, score " + g.total.toFixed(1) + ".";
+}
+function humanAct(a) {
+  if (watching) return;
+  if (view !== human) { show(human); return; }           // first press after watching just brings your game back
+  if (human.done) { $("msg").textContent = endText(human) + " Press New game to play again."; return; }
+  var out = human.step(a);
+  drawBoard(human);
+  $("msg").textContent = describe(a, out) + (human.done ? " " + endText(human) : "");
+}
+function newHumanGame() {
+  if (watching) return;
+  human.reset(); show(human);
+  $("msg").textContent = "New game. Reach a supporter’s house, then knock.";
+}
+$("bUp").onclick = function () { humanAct(0); };
+$("bDown").onclick = function () { humanAct(1); };
+$("bLeft").onclick = function () { humanAct(2); };
+$("bRight").onclick = function () { humanAct(3); };
+$("bKnock").onclick = function () { humanAct(4); };
+$("bNew").onclick = newHumanGame;
+document.addEventListener("keydown", function (ev) {
+  var t = ev.target.tagName;
+  if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
+  var map = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, " ": 4, k: 4, K: 4 };
+  if (!(ev.key in map)) return;
+  ev.preventDefault();
+  humanAct(map[ev.key]);
+});
+
+/* ---------- the reward controls ---------- */
+var rewardInputs = { turnout: $("rTurnout"), step: $("rStep"), annoyed: $("rAnnoyed"), wasted: $("rWasted") };
+function showReward() { for (var k in rewardInputs) rewardInputs[k].value = REWARD[k]; }
+function setRewardPreset(mode) {
+  REWARD_MODE = mode;
+  var preset = REWARD_PRESETS[mode] || REWARD_PRESETS.default;
+  for (var k in REWARD_PRESETS.default) REWARD[k] = preset[k];
+  if (REWARD_MODE === "contact") REWARD.contact = preset.contact;
+  $("rewardMode").value = REWARD_MODE;
+  showReward();
+  human.reset(); show(human);
+  resetAgent("Reward preset changed, so the agent and the learning curve were reset.");
+}
+function resetAgent(why) {
+  agent = new Agent();
+  refreshAgentUI();
+  if (why) $("msg").textContent = why;
+}
+function onRewardChange() {
+  for (var k in rewardInputs) {
+    var v = parseFloat(rewardInputs[k].value);
+    REWARD[k] = isNaN(v) ? REWARD[k] : v;
+  }
+  human.reset(); show(human);
+  resetAgent("Reward changed, so the agent and the learning curve were reset.");
+}
+for (var key in rewardInputs) rewardInputs[key].addEventListener("change", onRewardChange);
+$("rewardMode").addEventListener("change", function () { setRewardPreset($("rewardMode").value); });
+$("bDefaults").onclick = function () {
+  REWARD_MODE = "default";
+  for (var k in DEFAULT_REWARD) REWARD[k] = DEFAULT_REWARD[k];
+  $("rewardMode").value = REWARD_MODE;
+  showReward(); onRewardChange();
+};
+
+/* ---------- training and watching ---------- */
+function setBusy(b) {
+  watching = b;
+  var ids = ["bTrain100", "bTrain1000", "bWatch", "bReset", "bNew", "bDefaults"];
+  for (var i = 0; i < ids.length; i++) $(ids[i]).disabled = b;
+  for (var k in rewardInputs) rewardInputs[k].disabled = b;
+}
+function train(n) { agent.train(n); refreshAgentUI(); }
+function watch() {
+  var g = new Game(), tieRng = makeRng(1);              // its own randomness, so watching never changes training
+  setBusy(true); show(g);
+  $("msg").textContent = "Watching the agent after " + agent.history.length + " training games.";
+  (function tick() {
+    if (g.done) {
+      setBusy(false);
+      $("msg").textContent = "Agent finished. " + endText(g);
+      return;
+    }
+    g.step(agent.best(g.state(), tieRng));
+    drawBoard(g);
+    setTimeout(tick, 350);
+  })();
+}
+$("bTrain100").onclick = function () { train(100); };
+$("bTrain1000").onclick = function () { train(1000); };
+$("bReset").onclick = function () { resetAgent("Agent reset: its table is back to zeros."); };
+$("bWatch").onclick = watch;
+
+/* ---------- the learning curve ---------- */
+var BUCKET = 50;
+function buckets() {
+  var n = Math.floor(agent.history.length / BUCKET), out = [];
+  for (var i = 0; i < n; i++) {
+    var sumR = 0, wins = 0;
+    for (var j = i * BUCKET; j < (i + 1) * BUCKET; j++) { sumR += agent.history[j].total; if (agent.history[j].goal) wins++; }
+    out.push({ games: (i + 1) * BUCKET, reward: sumR / BUCKET, goal: wins / BUCKET });
+  }
+  return out;
+}
+function drawChart() {
+  var cv = $("chart"), dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  var ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  var css = getComputedStyle(document.documentElement);
+  var fg = css.getPropertyValue("--fg").trim(), muted = css.getPropertyValue("--muted").trim();
+  var line = css.getPropertyValue("--line").trim(), accent = css.getPropertyValue("--accent").trim(), ok = css.getPropertyValue("--ok").trim();
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = "12px system-ui, sans-serif";
+  var data = buckets();
+  if (!data.length) {
+    ctx.fillStyle = muted; ctx.textAlign = "center";
+    ctx.fillText("Train at least 50 games to see the curve.", w / 2, h / 2);
+    $("chartNote").textContent = "";
+    return;
+  }
+  var pad = { l: 46, r: 46, t: 10, b: 30 }, W = w - pad.l - pad.r, H = h - pad.t - pad.b;
+  var lo = 0, hi = 0;                                   // reward axis always includes zero
+  data.forEach(function (d) { lo = Math.min(lo, d.reward); hi = Math.max(hi, d.reward); });
+  if (hi - lo < 1) hi = lo + 1;
+  function yR(v) { return pad.t + H - (v - lo) / (hi - lo) * H; }
+  function yG(v) { return pad.t + H - v * H; }
+  function xAt(i) { return pad.l + (data.length === 1 ? 0.5 : i / (data.length - 1)) * W; }
+
+  // gridlines: left labels are reward, right labels are the share of games
+  for (var t = 0; t <= 4; t++) {
+    var y = pad.t + H - t / 4 * H;
+    ctx.strokeStyle = line; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    ctx.fillStyle = muted;
+    ctx.textAlign = "right"; ctx.fillText((lo + t / 4 * (hi - lo)).toFixed(1), pad.l - 6, y + 4);
+    ctx.textAlign = "left"; ctx.fillText(Math.round(t / 4 * 100) + "%", pad.l + W + 6, y + 4);
+  }
+  if (lo < 0 && hi > 0) {                               // mark reward = 0
+    ctx.strokeStyle = muted; ctx.beginPath(); ctx.moveTo(pad.l, yR(0)); ctx.lineTo(pad.l + W, yR(0)); ctx.stroke();
+  }
+  // x labels: games trained, at most about 8
+  var every = Math.ceil(data.length / 8);
+  ctx.fillStyle = muted; ctx.textAlign = "center";
+  data.forEach(function (d, i) { if (i % every === 0 || i === data.length - 1) ctx.fillText(d.games, xAt(i), h - 12); });
+  ctx.fillText("training games", pad.l + W / 2, h - 0);
+
+  function plot(color, dash, yfn, key) {
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2.5; ctx.setLineDash(dash);
+    ctx.beginPath();
+    data.forEach(function (d, i) { var x = xAt(i), y = yfn(d[key]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+    ctx.stroke(); ctx.setLineDash([]);
+    if (data.length <= 40) data.forEach(function (d, i) { ctx.beginPath(); ctx.arc(xAt(i), yfn(d[key]), 3, 0, 6.2832); ctx.fill(); });
+  }
+  plot(ok, [6, 4], yG, "goal");
+  plot(accent, [], yR, "reward");
+
+  var last = data[data.length - 1];
+  $("chartNote").textContent = "Latest 50 games (ending at game " + last.games + "): average reward " +
+    last.reward.toFixed(1) + ", both supporters turned out in " + Math.round(last.goal * 100) + "% of them.";
+}
+
+/* ---------- keeping the page in sync ---------- */
+function refreshAgentUI() {
+  $("nGames").textContent = agent.history.length.toLocaleString();
+  drawChart();
+}
+$("stateNote").innerHTML = "The agent sees <b>" + NUM_STATES + " states</b>: 25 squares &times; 4 combinations of which two supporters have voted. " +
+  "With 5 actions, its table holds " + NUM_STATES + " &times; " + NUM_ACTIONS + " = " + NUM_STATES * NUM_ACTIONS + " Q-values.";
+window.addEventListener("resize", drawChart);
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
+
+setRewardPreset("default");
+show(human);
+refreshAgentUI();
+$("msg").textContent = "Walk to a supporter’s house, then knock.";
+</script>
+</body>
+</html>
